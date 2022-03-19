@@ -1,0 +1,221 @@
+using namespace System.Management.Automation
+using namespace System.Management.Automation.Language
+
+if($host.Name -eq 'ConsoleHost')
+{
+   Import-Module PSReadLine
+}
+
+Set-PSReadLineOption -PredictionSource History
+Set-PSReadLineOption -PredictionViewStyle ListView
+Set-PSReadLineOption -EditMode Windows
+
+Set-PSReadLineKeyHandler -Chord ctrl+d -Function ViExit
+
+Set-PSReadLineKeyHandler -Chord ctrl+w -Function BackwardDeleteWord
+
+Set-PSReadLineKeyHandler -Chord ctrl+e -Function EndOfLine
+
+Set-PSReadLineKeyHandler -Chord ctrl+a -Function BeginningOfLine
+
+Set-PSReadlineKeyHandler -Chord F7 -BriefDescription History -Description 'Show command history' -ScriptBlock {
+    
+    # Search the current history, ignore entries we don't like
+    $history = [System.Collections.ArrayList]@(
+        foreach ($line in (Get-History).CommandLine)
+        {
+            # I skip stuff that starts with regions, since that's mostly chunky stuff I copied from somewhere anyway
+            # It clobbers the list and quite frankly hasn't once been something I wanted.
+            if ($line -like "#region*") { continue }
+            $line
+        }
+    )
+    
+    # Reverse order: The latest is the first entry
+    $history.Reverse()
+    
+    # Show result in a gridview and accept results
+    $command = $history | Out-GridView -Title "History" -PassThru
+    
+    # Insert selection if any
+    if ($command)
+    {
+        # Replace current input with selection
+        [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine()
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert(($command -join "`n"))
+    }
+}
+
+Set-PSReadLineKeyHandler -Key "(","{","[" -BriefDescription "InsertPairedBraces" -LongDescription "Insert matching braces or wrap selection by matching braces" -ScriptBlock {
+    param($key, $arg)
+    $openChar = $key.KeyChar
+    $closeChar = switch ($openChar) {
+        <#case#> "(" { [char]")"; break }
+        <#case#> "{" { [char]"}"; break }
+        <#case#> "[" { [char]"]"; break }
+    }
+
+    $selectionStart = $null
+    $selectionLength = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+    $line = $null
+    $cursor = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+
+    if ($selectionStart -ne -1) {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $openChar + $line.SubString($selectionStart, $selectionLength) + $closeChar)
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+        return
+    }
+    $nOpen = [regex]::Matches($line, [regex]::Escape($openChar)).Count
+    $nClose = [regex]::Matches($line, [regex]::Escape($closeChar)).Count
+    if ($nOpen -ne $nClose) {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($openChar)
+    }
+    else {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($openChar + $closeChar)
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor - 1)
+    }
+}
+
+Set-PSReadLineKeyHandler -Key "`"","'" -BriefDescription "smartQuotation" -LongDescription "Put quotation marks and move the cursor between them or put marks around the selection" -ScriptBlock {
+    param($key, $arg)
+    $mark = $key.KeyChar
+
+    $selectionStart = $null
+    $selectionLength = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetSelectionState([ref]$selectionStart, [ref]$selectionLength)
+    $line = $null
+    $cursor = $null
+    [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+
+    if ($selectionStart -ne -1) {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Replace($selectionStart, $selectionLength, $mark + $line.SubString($selectionStart, $selectionLength) + $mark)
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($selectionStart + $selectionLength + 2)
+        return
+    }
+
+
+if ($line[$cursor] -eq $mark) {
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor + 1)
+        return
+    }
+
+    $nMark = [regex]::Matches($line, $mark).Count
+    if ($nMark % 2 -eq 1) {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($mark)
+    }
+    else {
+        [Microsoft.PowerShell.PSConsoleReadLine]::Insert($mark + $mark)
+        [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
+        [Microsoft.PowerShell.PSConsoleReadLine]::SetCursorPosition($cursor - 1)
+    }
+}
+
+
+If(Test-Path Alias:curl){Remove-Item Alias:curl}
+If(Test-Path Alias:wget){Remove-Item Alias:wget}
+
+function hosts{notepad c:\windows\system32\drivers\etc\hosts}
+
+function New-Password {
+    <#
+    .SYNOPSIS
+        Generate a random password.
+    .DESCRIPTION
+        Generate a random password.
+    .NOTES
+        Change log:
+            27/11/2017 - faustonascimento - Swapped Get-Random for System.Random.
+                                            Swapped Sort-Object for Fisher-Yates shuffle.
+            17/03/2017 - Chris Dent - Created.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    param (
+        # The length of the password which should be created.
+        [Parameter(ValueFromPipeline)]
+        [ValidateRange(8, 255)]
+        [Int32]$Length = 10,
+
+        # The character sets the password may contain. A password will contain at least one of each of the characters.
+        [String[]]$CharacterSet = ('abcdefghijklmnopqrstuvwxyz',
+                                  'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+                                  '0123456789',
+                                  '!$%&^.#;'),
+
+        # The number of characters to select from each character set.
+        [Int32[]]$CharacterSetCount = (@(1) * $CharacterSet.Count),
+        [Parameter()]
+        [switch]$ConvertToSecureString
+    )
+
+    begin {
+        $bytes = [Byte[]]::new(4)
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $rng.GetBytes($bytes)
+
+        $seed = [System.BitConverter]::ToInt32($bytes, 0)
+        $rnd = [Random]::new($seed)
+
+        if ($CharacterSet.Count -ne $CharacterSetCount.Count) {
+            throw "The number of items in -CharacterSet needs to match the number of items in -CharacterSetCount"
+        }
+
+        $allCharacterSets = [String]::Concat($CharacterSet)
+    }
+
+    process {
+        try {
+            $requiredCharLength = 0
+            foreach ($i in $CharacterSetCount) {
+                $requiredCharLength += $i
+            }
+
+            if ($requiredCharLength -gt $Length) {
+                throw "The sum of characters specified by CharacterSetCount is higher than the desired password length"
+            }
+
+            $password = [Char[]]::new($Length)
+            $index = 0
+
+            for ($i = 0; $i -lt $CharacterSet.Count; $i++) {
+                for ($j = 0; $j -lt $CharacterSetCount[$i]; $j++) {
+                    $password[$index++] = $CharacterSet[$i][$rnd.Next($CharacterSet[$i].Length)]
+                }
+            }
+
+            for ($i = $index; $i -lt $Length; $i++) {
+                $password[$index++] = $allCharacterSets[$rnd.Next($allCharacterSets.Length)]
+            }
+
+            # Fisher-Yates shuffle
+            for ($i = $Length; $i -gt 0; $i--) {
+                $n = $i - 1
+                $m = $rnd.Next($i)
+                $j = $password[$m]
+                $password[$m] = $password[$n]
+                $password[$n] = $j
+            }
+
+            $password = [String]::new($password)
+            if ($ConvertToSecureString.IsPresent) {
+                ConvertTo-SecureString -String $password -AsPlainText -Force
+            } else {
+                $password
+            }
+        } catch {
+            Write-Error -ErrorRecord $_
+        }
+    }
+}
+
+Import-Module -Name Terminal-Icons
+
+Import-Module -Name oh-my-posh
+
+Set-PoshPrompt -Theme mt
+
+Clear-Host
